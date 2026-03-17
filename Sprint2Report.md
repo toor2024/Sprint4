@@ -6,7 +6,7 @@ GitHub Repository: https://github.com/toor2024/Sprint2
 
 ## 1. Demonstration (8 points)
 
-YouTube/Panopto link: *(TODO: Add video link)*
+YouTube/Panopto link: https://youtu.be/ZHf1uEf6Mns
 
 Features demonstrated in the video:
 
