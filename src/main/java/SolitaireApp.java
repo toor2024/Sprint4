@@ -1,3 +1,5 @@
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -16,25 +18,31 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 
 /**
  * JavaFX GUI for Peg Solitaire. This class handles only the user interface
- * and delegates all game logic to the GameLogic class.
+ * and delegates all game logic to the Game class hierarchy.
  */
 public class SolitaireApp extends Application {
 
-    private GameLogic gameLogic;
+    private Game game;
+    private ManualGame manualGame;
+    private AutomatedGame automatedGame;
     private GridPane boardGrid;
     private TextField sizeField;
     private ToggleGroup typeGroup;
     private Label statusLabel;
+    private Button autoplayBtn;
+    private Button randomizeBtn;
+    private Button newGameBtn;
     private int selectedRow = -1;
     private int selectedCol = -1;
+    private Timeline autoplayTimeline;
+    private boolean isAutoplayMode = false;
 
     @Override
     public void start(Stage stage) {
-        gameLogic = new GameLogic();
-
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(15));
 
@@ -77,13 +85,21 @@ public class SolitaireApp extends Application {
         boardGrid.setVgap(2);
         root.setCenter(boardGrid);
 
-        // Right: New Game button
+        // Right: Buttons
         VBox rightBox = new VBox(10);
         rightBox.setPadding(new Insets(0, 0, 0, 15));
         rightBox.setAlignment(Pos.TOP_CENTER);
-        Button newGameBtn = new Button("New Game");
+
+        newGameBtn = new Button("New Game");
         newGameBtn.setOnAction(e -> startNewGame());
-        rightBox.getChildren().add(newGameBtn);
+
+        autoplayBtn = new Button("Autoplay");
+        autoplayBtn.setOnAction(e -> startAutoplay());
+
+        randomizeBtn = new Button("Randomize");
+        randomizeBtn.setOnAction(e -> randomizeBoard());
+
+        rightBox.getChildren().addAll(newGameBtn, autoplayBtn, randomizeBtn);
         root.setRight(rightBox);
 
         // Bottom: Status message
@@ -91,13 +107,15 @@ public class SolitaireApp extends Application {
         statusLabel.setPadding(new Insets(10, 0, 0, 0));
         root.setBottom(statusLabel);
 
-        Scene scene = new Scene(root, 620, 580);
+        Scene scene = new Scene(root, 650, 600);
         stage.setTitle("Peg Solitaire");
         stage.setScene(scene);
         stage.show();
     }
 
     private void startNewGame() {
+        stopAutoplay();
+
         int size;
         try {
             size = Integer.parseInt(sizeField.getText().trim());
@@ -113,16 +131,101 @@ public class SolitaireApp extends Application {
             return;
         }
 
-        gameLogic.newGame(size, type);
+        manualGame = new ManualGame();
+        manualGame.newGame(size, type);
+        game = manualGame;
+        isAutoplayMode = false;
+
         selectedRow = -1;
         selectedCol = -1;
         updateBoard();
-        statusLabel.setText("Game started! Click a peg to select, then click a hole to move.");
+        statusLabel.setText("Manual game started. Click a peg to select, then click a hole.");
+    }
+
+    private void startAutoplay() {
+        stopAutoplay();
+
+        int size;
+        try {
+            size = Integer.parseInt(sizeField.getText().trim());
+        } catch (NumberFormatException e) {
+            statusLabel.setText("Invalid board size. Enter an odd number >= 5.");
+            return;
+        }
+
+        BoardType type = (BoardType) typeGroup.getSelectedToggle().getUserData();
+
+        if (!Board.isValidSize(size, type)) {
+            statusLabel.setText("Invalid board size. Enter an odd number >= 5.");
+            return;
+        }
+
+        automatedGame = new AutomatedGame();
+        automatedGame.newGame(size, type);
+        game = automatedGame;
+        isAutoplayMode = true;
+
+        selectedRow = -1;
+        selectedCol = -1;
+        updateBoard();
+        statusLabel.setText("Autoplay started...");
+
+        autoplayTimeline = new Timeline(new KeyFrame(Duration.millis(400), e -> {
+            Move move = automatedGame.autoplayMove();
+            if (move == null || automatedGame.isGameOver()) {
+                stopAutoplay();
+                updateBoard();
+                Board board = automatedGame.getBoard();
+                if (automatedGame.hasWon()) {
+                    statusLabel.setText("Autoplay finished. Won! Rating: "
+                        + automatedGame.getRating());
+                } else {
+                    statusLabel.setText("Autoplay finished. Pegs left: "
+                        + board.getPegCount() + ". Rating: "
+                        + automatedGame.getRating());
+                }
+                return;
+            }
+            updateBoard();
+            statusLabel.setText("Autoplay... Pegs remaining: "
+                + automatedGame.getBoard().getPegCount());
+        }));
+        autoplayTimeline.setCycleCount(Timeline.INDEFINITE);
+        autoplayTimeline.play();
+    }
+
+    private void stopAutoplay() {
+        if (autoplayTimeline != null) {
+            autoplayTimeline.stop();
+            autoplayTimeline = null;
+        }
+    }
+
+    private void randomizeBoard() {
+        if (isAutoplayMode) {
+            statusLabel.setText("Cannot randomize during autoplay.");
+            return;
+        }
+        if (manualGame == null || manualGame.getBoard() == null) {
+            statusLabel.setText("Start a new game first.");
+            return;
+        }
+        if (manualGame.isGameOver()) {
+            statusLabel.setText("Game is over. Start a new game first.");
+            return;
+        }
+
+        manualGame.randomize();
+        selectedRow = -1;
+        selectedCol = -1;
+        updateBoard();
+        statusLabel.setText("Board randomized! Pegs remaining: "
+            + manualGame.getBoard().getPegCount());
     }
 
     private void updateBoard() {
         boardGrid.getChildren().clear();
-        Board board = gameLogic.getBoard();
+        Board board = game != null ? game.getBoard() : null;
         if (board == null) return;
 
         int size = board.getSize();
@@ -166,12 +269,13 @@ public class SolitaireApp extends Application {
     }
 
     private void handleCellClick(int row, int col) {
-        if (gameLogic.isGameOver()) {
+        if (isAutoplayMode) return;
+        if (game == null || game.isGameOver()) {
             statusLabel.setText("Game over! Click New Game to play again.");
             return;
         }
 
-        Board board = gameLogic.getBoard();
+        Board board = game.getBoard();
         if (board == null) return;
 
         int state = board.getCellState(row, col);
@@ -192,18 +296,18 @@ public class SolitaireApp extends Application {
                 statusLabel.setText("Peg selected at (" + row + "," + col
                     + "). Click a hole to move.");
             } else if (state == Board.EMPTY) {
-                if (gameLogic.makeMove(selectedRow, selectedCol, row, col)) {
+                if (game.makeMove(selectedRow, selectedCol, row, col)) {
                     selectedRow = -1;
                     selectedCol = -1;
                     updateBoard();
-                    if (gameLogic.isGameOver()) {
-                        if (gameLogic.hasWon()) {
+                    if (game.isGameOver()) {
+                        if (game.hasWon()) {
                             statusLabel.setText("You won! Rating: "
-                                + gameLogic.getRating());
+                                + game.getRating());
                         } else {
                             statusLabel.setText("Game over. No more moves. Pegs left: "
                                 + board.getPegCount() + ". Rating: "
-                                + gameLogic.getRating());
+                                + game.getRating());
                         }
                     } else {
                         statusLabel.setText("Move applied. Pegs remaining: "
