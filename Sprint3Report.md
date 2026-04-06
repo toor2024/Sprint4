@@ -1,6 +1,6 @@
 # Sprint 3 Report
 
-GitHub Repository: https://github.com/toor2024/Sprint2
+GitHub Repository: https://github.com/toor2024/Sprint3
 
 ---
 
