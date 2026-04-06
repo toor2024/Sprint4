@@ -6,7 +6,7 @@ GitHub Repository: https://github.com/toor2024/Sprint3
 
 ## 1. Demonstration (9 points)
 
-YouTube/Panopto link: *(TODO: Add video link)*
+YouTube/Panopto link: https://youtu.be/yr4vFKCE8OY
 
 Features demonstrated in the video:
 
