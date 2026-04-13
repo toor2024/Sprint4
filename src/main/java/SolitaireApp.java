@@ -5,6 +5,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.TextField;
@@ -17,8 +18,13 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.util.Duration;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
 
 /**
  * JavaFX GUI for Peg Solitaire. This class handles only the user interface
@@ -36,13 +42,21 @@ public class SolitaireApp extends Application {
     private Button autoplayBtn;
     private Button randomizeBtn;
     private Button newGameBtn;
+    private Button replayBtn;
+    private CheckBox recordCheckBox;
     private int selectedRow = -1;
     private int selectedCol = -1;
     private Timeline autoplayTimeline;
     private boolean isAutoplayMode = false;
+    private GameRecorder recorder;
+    private boolean isReplayMode = false;
+    private Stage primaryStage;
 
     @Override
     public void start(Stage stage) {
+        this.primaryStage = stage;
+        this.recorder = new GameRecorder();
+
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(15));
 
@@ -75,7 +89,11 @@ public class SolitaireApp extends Application {
         diamondBtn.setToggleGroup(typeGroup);
         diamondBtn.setUserData(BoardType.DIAMOND);
 
-        leftBox.getChildren().addAll(typeLabel, englishBtn, hexagonBtn, diamondBtn);
+        // Record game checkbox
+        recordCheckBox = new CheckBox("Record game");
+
+        leftBox.getChildren().addAll(typeLabel, englishBtn, hexagonBtn, diamondBtn,
+            new Region(), recordCheckBox);
         root.setLeft(leftBox);
 
         // Center: Board display
@@ -90,6 +108,9 @@ public class SolitaireApp extends Application {
         rightBox.setPadding(new Insets(0, 0, 0, 15));
         rightBox.setAlignment(Pos.TOP_CENTER);
 
+        replayBtn = new Button("Replay");
+        replayBtn.setOnAction(e -> startReplay());
+
         newGameBtn = new Button("New Game");
         newGameBtn.setOnAction(e -> startNewGame());
 
@@ -99,7 +120,7 @@ public class SolitaireApp extends Application {
         randomizeBtn = new Button("Randomize");
         randomizeBtn.setOnAction(e -> randomizeBoard());
 
-        rightBox.getChildren().addAll(newGameBtn, autoplayBtn, randomizeBtn);
+        rightBox.getChildren().addAll(replayBtn, newGameBtn, autoplayBtn, randomizeBtn);
         root.setRight(rightBox);
 
         // Bottom: Status message
@@ -115,6 +136,7 @@ public class SolitaireApp extends Application {
 
     private void startNewGame() {
         stopAutoplay();
+        stopReplay();
 
         int size;
         try {
@@ -136,6 +158,13 @@ public class SolitaireApp extends Application {
         game = manualGame;
         isAutoplayMode = false;
 
+        // Start recording if checkbox is checked
+        if (recordCheckBox.isSelected()) {
+            recorder.startRecording(size, type, "MANUAL");
+        } else {
+            recorder.stopRecording();
+        }
+
         selectedRow = -1;
         selectedCol = -1;
         updateBoard();
@@ -144,6 +173,7 @@ public class SolitaireApp extends Application {
 
     private void startAutoplay() {
         stopAutoplay();
+        stopReplay();
 
         int size;
         try {
@@ -165,6 +195,13 @@ public class SolitaireApp extends Application {
         game = automatedGame;
         isAutoplayMode = true;
 
+        // Start recording if checkbox is checked
+        if (recordCheckBox.isSelected()) {
+            recorder.startRecording(size, type, "AUTOMATED");
+        } else {
+            recorder.stopRecording();
+        }
+
         selectedRow = -1;
         selectedCol = -1;
         updateBoard();
@@ -172,9 +209,17 @@ public class SolitaireApp extends Application {
 
         autoplayTimeline = new Timeline(new KeyFrame(Duration.millis(400), e -> {
             Move move = automatedGame.autoplayMove();
+            if (move != null && recorder.isRecording()) {
+                recorder.recordMove(move.getFromRow(), move.getFromCol(),
+                    move.getToRow(), move.getToCol());
+            }
             if (move == null || automatedGame.isGameOver()) {
                 stopAutoplay();
                 updateBoard();
+                // Save recording if active
+                if (recorder.isRecording()) {
+                    saveRecording();
+                }
                 Board board = automatedGame.getBoard();
                 if (automatedGame.hasWon()) {
                     statusLabel.setText("Autoplay finished. Won! Rating: "
@@ -206,6 +251,10 @@ public class SolitaireApp extends Application {
             statusLabel.setText("Cannot randomize during autoplay.");
             return;
         }
+        if (isReplayMode) {
+            statusLabel.setText("Cannot randomize during replay.");
+            return;
+        }
         if (manualGame == null || manualGame.getBoard() == null) {
             statusLabel.setText("Start a new game first.");
             return;
@@ -216,11 +265,123 @@ public class SolitaireApp extends Application {
         }
 
         manualGame.randomize();
+
+        // Record the randomize event with full board state
+        if (recorder.isRecording()) {
+            recorder.recordRandomize(manualGame.getBoard());
+        }
+
         selectedRow = -1;
         selectedCol = -1;
         updateBoard();
         statusLabel.setText("Board randomized! Pegs remaining: "
             + manualGame.getBoard().getPegCount());
+    }
+
+    private void startReplay() {
+        stopAutoplay();
+        stopReplay();
+
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Open Recorded Game");
+        fileChooser.getExtensionFilters().add(
+            new FileChooser.ExtensionFilter("Text Files", "*.txt"));
+        File file = fileChooser.showOpenDialog(primaryStage);
+        if (file == null) return;
+
+        GameRecorder loaded;
+        try {
+            loaded = GameRecorder.loadFromFile(file.getAbsolutePath());
+        } catch (IOException e) {
+            statusLabel.setText("Error loading file: " + e.getMessage());
+            return;
+        }
+
+        // Set up the game based on recorded settings
+        BoardType type = loaded.getBoardType();
+        int size = loaded.getBoardSize();
+        String mode = loaded.getGameMode();
+
+        manualGame = new ManualGame();
+        manualGame.newGame(size, type);
+        game = manualGame;
+        isAutoplayMode = false;
+        isReplayMode = true;
+
+        sizeField.setText(String.valueOf(size));
+        // Select the correct radio button
+        typeGroup.getToggles().forEach(toggle -> {
+            if (toggle.getUserData() == type) {
+                toggle.setSelected(true);
+            }
+        });
+
+        selectedRow = -1;
+        selectedCol = -1;
+        updateBoard();
+        statusLabel.setText("Replaying " + mode.toLowerCase() + " game...");
+
+        List<String> events = loaded.getEvents();
+        final int[] index = {0};
+
+        Timeline replayTimeline = new Timeline(new KeyFrame(Duration.millis(600), e -> {
+            if (index[0] >= events.size()) {
+                stopReplay();
+                Board board = game.getBoard();
+                statusLabel.setText("Replay finished. Pegs left: "
+                    + board.getPegCount() + ". Rating: " + game.getRating());
+                return;
+            }
+
+            String event = events.get(index[0]);
+            if (event.startsWith("MOVE:")) {
+                Move move = GameRecorder.parseMove(event);
+                game.makeMove(move.getFromRow(), move.getFromCol(),
+                    move.getToRow(), move.getToCol());
+                updateBoard();
+                statusLabel.setText("Replaying... Move " + (index[0] + 1)
+                    + " of " + events.size() + ". Pegs: "
+                    + game.getBoard().getPegCount());
+            } else if (event.startsWith("RANDOMIZE:")) {
+                GameRecorder.applyRandomizeEvent(event, game.getBoard());
+                updateBoard();
+                statusLabel.setText("Replaying... Randomize applied. Pegs: "
+                    + game.getBoard().getPegCount());
+            }
+            index[0]++;
+        }));
+        autoplayTimeline = replayTimeline;
+        replayTimeline.setCycleCount(Timeline.INDEFINITE);
+        replayTimeline.play();
+    }
+
+    private void stopReplay() {
+        isReplayMode = false;
+        if (autoplayTimeline != null) {
+            autoplayTimeline.stop();
+            autoplayTimeline = null;
+        }
+    }
+
+    private void saveRecording() {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Save Recorded Game");
+        fileChooser.getExtensionFilters().add(
+            new FileChooser.ExtensionFilter("Text Files", "*.txt"));
+        fileChooser.setInitialFileName("solitaire_game.txt");
+        File file = fileChooser.showSaveDialog(primaryStage);
+        if (file == null) {
+            recorder.stopRecording();
+            return;
+        }
+
+        try {
+            recorder.saveToFile(file.getAbsolutePath());
+            recorder.stopRecording();
+            statusLabel.setText(statusLabel.getText() + " Game saved to file.");
+        } catch (IOException e) {
+            statusLabel.setText("Error saving: " + e.getMessage());
+        }
     }
 
     private void updateBoard() {
@@ -269,7 +430,7 @@ public class SolitaireApp extends Application {
     }
 
     private void handleCellClick(int row, int col) {
-        if (isAutoplayMode) return;
+        if (isAutoplayMode || isReplayMode) return;
         if (game == null || game.isGameOver()) {
             statusLabel.setText("Game over! Click New Game to play again.");
             return;
@@ -297,10 +458,19 @@ public class SolitaireApp extends Application {
                     + "). Click a hole to move.");
             } else if (state == Board.EMPTY) {
                 if (game.makeMove(selectedRow, selectedCol, row, col)) {
+                    // Record the move
+                    if (recorder.isRecording()) {
+                        recorder.recordMove(selectedRow, selectedCol, row, col);
+                    }
+
                     selectedRow = -1;
                     selectedCol = -1;
                     updateBoard();
                     if (game.isGameOver()) {
+                        // Save recording if active
+                        if (recorder.isRecording()) {
+                            saveRecording();
+                        }
                         if (game.hasWon()) {
                             statusLabel.setText("You won! Rating: "
                                 + game.getRating());
